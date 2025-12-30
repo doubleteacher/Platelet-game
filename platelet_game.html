@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hemostasis Game v3 (Place Injury + Left Port + Hold-to-Inject + Clear Overlay)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP", sans-serif; }
+    body { margin: 0; background:#0b0f17; color:#e8eefc; }
+    .wrap { display:grid; grid-template-columns: 440px 1fr; height:100vh; gap:14px; padding:14px; box-sizing:border-box; }
+    .panel { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:14px; padding:14px; overflow:auto; }
+    canvas { width:100%; height:100%; display:block; border-radius:14px; border:1px solid rgba(255,255,255,0.10);
+      background:
+        radial-gradient(1200px 700px at 65% 45%, rgba(120,180,255,0.10), transparent 60%),
+        radial-gradient(900px 600px at 20% 70%, rgba(255,120,160,0.08), transparent 55%),
+        #060912;
+    }
+    h1{ font-size:16px; margin:0 0 8px; }
+    .sub{ font-size:12px; opacity:.85; line-height:1.45; margin-bottom:10px; }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+    button{
+      background:rgba(255,255,255,0.10);
+      border:1px solid rgba(255,255,255,0.18);
+      color:#e8eefc;
+      padding:10px 12px;
+      border-radius:12px;
+      cursor:pointer;
+      user-select:none;
+    }
+    button:hover{ background:rgba(255,255,255,0.16); }
+    .sep{ height:1px; background:rgba(255,255,255,0.10); margin:12px 0; }
+    label{ display:grid; grid-template-columns: 1fr 90px; gap:10px; align-items:center; margin:10px 0 4px; }
+    input[type=range]{ width:100%; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Noto Sans Mono", monospace; }
+    .kpi { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
+    .card { background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.10); border-radius:14px; padding:10px; }
+    .card .t{ font-size:12px; opacity:.8; }
+    .card .v{ font-size:18px; font-weight:700; margin-top:4px; }
+    .legend { font-size:12px; opacity:.85; display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+    .dot { width:10px; height:10px; border-radius:999px; display:inline-block; margin-right:6px; }
+    .pill { display:inline-block; padding: 2px 8px; border-radius:999px; border:1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.06); font-size:12px; }
+    .hint{ font-size:12px; opacity:.85; line-height:1.55; margin-top:10px;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <h1>止血ゲーム v3（①〜④ + Clear!!）</h1>
+    <div class="sub">
+      <b>操作</b><br>
+      1) <span class="pill">Place Injury</span> → キャンバスをクリックして傷口を配置（②）<br>
+      2) <span class="pill">Mode: VWF</span> → 左端の帯（投与口ゾーン）をクリックして投与口高さを決める → 押しっぱなしでVWF投与（③）<br>
+      3) <span class="pill">Mode: Platelet</span> → 同様に血小板を投与（④）<br>
+      4) Coverage 100%で全画面に <b>Clear!!</b>（クリック or Enterで消える）
+    </div>
+
+    <div class="row">
+      <button id="placeInjury">Place Injury</button>
+      <button id="reset">Reset</button>
+      <button id="modeVWF">Mode: VWF ✓</button>
+      <button id="modePLT">Mode: Platelet</button>
+    </div>
+
+    <div class="sep"></div>
+
+    <label><span>血流/せん断 (Flow)</span><span class="mono" id="flowv"></span></label>
+    <input id="flow" type="range" min="10" max="200" value="110" />
+
+    <label><span>基礎血小板（自然流入）</span><span class="mono" id="basePlv"></span></label>
+    <input id="basePl" type="range" min="0" max="200" value="80" />
+
+    <label><span>基礎RBC（見た目密度）</span><span class="mono" id="baseRbcv"></span></label>
+    <input id="baseRbc" type="range" min="0" max="200" value="120" />
+
+    <label><span>RBC中央寄せ（0=均等）</span><span class="mono" id="rbcCenterv"></span></label>
+    <input id="rbcCenter" type="range" min="0" max="100" value="15" />
+
+    <div class="sep"></div>
+    <div class="sub" style="margin:0 0 8px;"><b>反応（確率）</b></div>
+
+    <label><span>VWF貼付（傷口で捕捉）</span><span class="mono" id="vwfBindv"></span></label>
+    <input id="vwfBind" type="range" min="0" max="200" value="110" />
+
+    <label><span>血小板粘着（VWF上）</span><span class="mono" id="pltBindv"></span></label>
+    <input id="pltBind" type="range" min="0" max="200" value="120" />
+
+    <label><span>剥離（せん断で外れる）</span><span class="mono" id="detachv"></span></label>
+    <input id="detach" type="range" min="0" max="200" value="70" />
+
+    <div class="sep"></div>
+
+    <div class="kpi">
+      <div class="card"><div class="t">Coverage（傷口被覆）</div><div class="v" id="cov">0%</div></div>
+      <div class="card"><div class="t">Status</div><div class="v" id="status">--</div></div>
+      <div class="card"><div class="t">Port Y（投与口高さ）</div><div class="v" id="portY">--</div></div>
+      <div class="card"><div class="t">Hint</div><div class="v" id="hint">--</div></div>
+    </div>
+
+    <div class="legend">
+      <span><span class="dot" style="background:#d7263d"></span>赤血球</span>
+      <span><span class="dot" style="background:#ffd166"></span>血小板</span>
+      <span><span class="dot" style="background:#b8f2e6"></span>VWF（流れる）</span>
+      <span><span class="dot" style="background:#7bdff2"></span>VWF（貼付）</span>
+      <span><span class="dot" style="background:#ef476f"></span>傷口</span>
+      <span><span class="dot" style="background:#ffffff"></span>投与口</span>
+    </div>
+
+    <div class="hint">
+      ・左端帯をクリック → 投与口設定＆そのまま押しっぱなしで連続投与<br>
+      ・RBC中央寄せ=0にすると赤血球が上下にも広がります（①）<br>
+      ・Clear!!表示中はクリック/Enterで閉じます（その後は継続。やり直しはReset）
+    </div>
+  </div>
+
+  <div class="panel" style="padding:0;">
+    <canvas id="c"></canvas>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha:false });
+
+  // ---- world coords fixed (resize-safe) ----
+  const WORLD = { w: 1500, h: 850 };
+  const view = { scale:1, ox:0, oy:0 };
+  function resize(){
+    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+
+    const sx = rect.width / WORLD.w;
+    const sy = rect.height / WORLD.h;
+    view.scale = Math.min(sx, sy);
+    view.ox = (rect.width - WORLD.w*view.scale) / 2;
+    view.oy = (rect.height - WORLD.h*view.scale) / 2;
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function w2s(x,y){ return { x: view.ox + x*view.scale, y: view.oy + y*view.scale }; }
+  function s2w(x,y){ return { x: (x - view.ox)/view.scale, y: (y - view.oy)/view.scale }; }
+  function rW2S(r){ return r*view.scale; }
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
+  function clamp01(x){ return clamp(x,0,1); }
+
+  // ---- UI ----
+  const ui = {
+    placeInjury: document.getElementById("placeInjury"),
+    reset: document.getElementById("reset"),
+    modeVWF: document.getElementById("modeVWF"),
+    modePLT: document.getElementById("modePLT"),
+
+    flow: document.getElementById("flow"),
+    basePl: document.getElementById("basePl"),
+    baseRbc: document.getElementById("baseRbc"),
+    rbcCenter: document.getElementById("rbcCenter"),
+    vwfBind: document.getElementById("vwfBind"),
+    pltBind: document.getElementById("pltBind"),
+    detach: document.getElementById("detach"),
+
+    flowv: document.getElementById("flowv"),
+    basePlv: document.getElementById("basePlv"),
+    baseRbcv: document.getElementById("baseRbcv"),
+    rbcCenterv: document.getElementById("rbcCenterv"),
+    vwfBindv: document.getElementById("vwfBindv"),
+    pltBindv: document.getElementById("pltBindv"),
+    detachv: document.getElementById("detachv"),
+
+    cov: document.getElementById("cov"),
+    status: document.getElementById("status"),
+    portY: document.getElementById("portY"),
+    hint: document.getElementById("hint"),
+  };
+
+  function setReadouts(){
+    ui.flowv.textContent = `${ui.flow.value}%`;
+    ui.basePlv.textContent = `${ui.basePl.value}%`;
+    ui.baseRbcv.textContent = `${ui.baseRbc.value}%`;
+    ui.rbcCenterv.textContent = `${ui.rbcCenter.value}%`;
+    ui.vwfBindv.textContent = `${ui.vwfBind.value}%`;
+    ui.pltBindv.textContent = `${ui.pltBind.value}%`;
+    ui.detachv.textContent = `${ui.detach.value}%`;
+  }
+  ["input","change"].forEach(ev=>{
+    [ui.flow,ui.basePl,ui.baseRbc,ui.rbcCenter,ui.vwfBind,ui.pltBind,ui.detach]
+      .forEach(el => el.addEventListener(ev, setReadouts));
+  });
+  setReadouts();
+
+  // ---- game state ----
+  let mode = "VWF";               // VWF | PLT
+  let placingInjury = false;      // click-to-place injury
+  let injury = null;              // {x,y,w,h}
+  let coverage = 0;
+  let status = "--";
+
+  // Clear overlay
+  let cleared = false;
+  let clearFlash = 0;
+
+  // injection port on left
+  const port = { y: WORLD.h*0.52 }; // world coords
+  let injecting = false;          // mouse held
+  let injectAccum = 0;
+  const INJECT_INTERVAL = 0.08;   // seconds (hold to inject)
+
+  // particles
+  const RBC = [];
+  const PLT = [];
+  const VWF = [];
+  const VWF_TETHER = [];
+  const PLT_ADH = [];
+  const MAX_FREE = 1100;
+
+  function setMode(m){
+    mode = m;
+    ui.modeVWF.textContent = `Mode: VWF${mode==="VWF" ? " ✓" : ""}`;
+    ui.modePLT.textContent = `Mode: Platelet${mode==="PLT" ? " ✓" : ""}`;
+    ui.hint.textContent = mode==="VWF" ? "Left band: set port & hold to inject VWF" : "Left band: set port & hold to inject Platelets";
+  }
+  setMode("VWF");
+
+  function setStatus(s){
+    status = s;
+    ui.status.textContent = status;
+  }
+
+  function resetAll(){
+    RBC.length=0; PLT.length=0; VWF.length=0; VWF_TETHER.length=0; PLT_ADH.length=0;
+    injury = null;
+    placingInjury = false;
+    injecting = false;
+    injectAccum = 0;
+    coverage = 0;
+    cleared = false;
+    clearFlash = 0;
+    setStatus("--");
+    ui.cov.textContent = "0%";
+    ui.portY.textContent = `${port.y.toFixed(0)}`;
+
+    // seed
+    spawnRBC(150);
+    spawnPlatelets(95);
+    spawnVWF(45);
+  }
+
+  function createInjuryAt(x,y){
+    const w = 300;
+    const h = 80;
+    const yClamped = clamp(y, 120, WORLD.h-120);
+    const xClamped = clamp(x, WORLD.w*0.25, WORLD.w*0.92);
+    injury = { x: xClamped, y: yClamped, w, h };
+    setStatus("Injury placed");
+  }
+
+  // ---- spawners ----
+  function spawnRBC(n){
+    for(let i=0;i<n;i++){
+      RBC.push({
+        x: rand(-260, WORLD.w),
+        y: rand(90, WORLD.h-90),
+        vx: rand(180, 300),
+        vy: rand(-40, 40),
+        a: rand(18, 28),
+        b: rand(12, 18),
+        rot: rand(0, Math.PI),
+      });
+    }
+  }
+  function spawnPlatelets(n, yTarget=null){
+    for(let i=0;i<n;i++){
+      const y = (yTarget===null) ? rand(60, WORLD.h-60) : clamp(yTarget + rand(-45,45), 40, WORLD.h-40);
+      PLT.push({
+        x: rand(-70, -10),
+        y,
+        vx: rand(230, 360),
+        vy: rand(-32, 32),
+        r: rand(3.0, 4.5),
+      });
+    }
+  }
+  function spawnVWF(n, yTarget=null){
+    for(let i=0;i<n;i++){
+      const y = (yTarget===null) ? rand(60, WORLD.h-60) : clamp(yTarget + rand(-50,50), 40, WORLD.h-40);
+      VWF.push({
+        x: rand(-70, -10),
+        y,
+        vx: rand(240, 380),
+        vy: rand(-28, 28),
+        len: rand(10, 22),
+        ang: rand(-0.7, 0.7),
+      });
+    }
+  }
+
+  // ---- helpers ----
+  function inInjuryZone(x,y){
+    if(!injury) return false;
+    return (x >= injury.x && x <= injury.x + injury.w &&
+            y >= injury.y - injury.h/2 && y <= injury.y + injury.h/2);
+  }
+
+  function updateCoverage(){
+    if(!injury){
+      coverage = 0;
+      ui.cov.textContent = "0%";
+      return;
+    }
+    const injuryArea = injury.w * injury.h;
+    const plateletArea = PLT_ADH.length * (Math.PI * 10 * 10);
+    coverage = clamp01(plateletArea / injuryArea);
+    ui.cov.textContent = `${Math.round(coverage*100)}%`;
+
+    if (!cleared && coverage >= 1){
+      cleared = true;
+      clearFlash = 1.0;
+      setStatus("COVERED! (Goal)");
+    }
+  }
+
+  // ---- main step ----
+  function step(dt){
+    const flow = ui.flow.value/100;
+    const basePl = ui.basePl.value/100;
+    const baseRbc = ui.baseRbc.value/100;
+
+    // baseline inflow
+    if (Math.random() < 0.22*baseRbc) spawnRBC(1);
+    if (Math.random() < 0.12*basePl) spawnPlatelets(1);
+    if (Math.random() < 0.02) spawnVWF(1);
+
+    // hold-to-inject (only if injury exists; clear overlay doesn't stop physics)
+    if (injecting && injury){
+      injectAccum += dt;
+      while (injectAccum >= INJECT_INTERVAL){
+        injectAccum -= INJECT_INTERVAL;
+        if (mode === "VWF") spawnVWF(28, port.y);
+        else spawnPlatelets(28, port.y);
+      }
+    }
+
+    // cap
+    while (RBC.length > MAX_FREE) RBC.shift();
+    while (PLT.length > MAX_FREE) PLT.shift();
+    while (VWF.length > MAX_FREE) VWF.shift();
+
+    const yMin = 80, yMax = WORLD.h - 80;
+
+    // RBC (① adjustable centering)
+    const centerStrength = (ui.rbcCenter.value/100); // 0..1
+    for (const r of RBC){
+      r.x += r.vx * flow * dt;
+      r.y += r.vy * dt;
+
+      const cy = WORLD.h * 0.50;
+      const k = 0.020 * centerStrength;
+      r.y += (cy - r.y) * k * dt * 60;
+
+      if (r.y < yMin){ r.y = yMin; r.vy *= -0.6; }
+      if (r.y > yMax){ r.y = yMax; r.vy *= -0.6; }
+    }
+    for (let i=RBC.length-1;i>=0;i--){
+      if (RBC[i].x > WORLD.w + 260) RBC.splice(i,1);
+    }
+
+    // VWF free + tether (③)
+    const vwfBind = ui.vwfBind.value/100;
+    const detach = ui.detach.value/100;
+    for (let i=VWF.length-1;i>=0;i--){
+      const v = VWF[i];
+      v.x += v.vx * flow * dt;
+      v.y += v.vy * dt;
+      v.ang += rand(-0.6,0.6) * dt * 0.5;
+
+      if (v.y < yMin+10){ v.y = yMin+10; v.vy *= -0.5; }
+      if (v.y > yMax-10){ v.y = yMax-10; v.vy *= -0.5; }
+
+      if (injury && inInjuryZone(v.x, v.y)){
+        const shearPenalty = 1/(1 + 0.75*flow);
+        const pTether = 0.014 * vwfBind * shearPenalty;
+        if (Math.random() < pTether){
+          VWF_TETHER.push({ x: v.x, y: v.y, life: 1.0 });
+          VWF.splice(i,1);
+          continue;
+        }
+      }
+      if (v.x > WORLD.w + 140) VWF.splice(i,1);
+    }
+
+    // tether decay/detach
+    for (let i=VWF_TETHER.length-1;i>=0;i--){
+      const t = VWF_TETHER[i];
+      t.life -= 0.0007 * dt * 60;
+      const pDet = 0.0010 * detach * flow;
+      if (Math.random() < pDet) t.life -= 0.10;
+      if (t.life <= 0) VWF_TETHER.splice(i,1);
+    }
+
+    // Platelets free + adhesion (④)
+    const pltBind = ui.pltBind.value/100;
+    for (let i=PLT.length-1;i>=0;i--){
+      const p = PLT[i];
+      p.x += p.vx * flow * dt;
+      p.y += p.vy * dt;
+
+      const cy = WORLD.h*0.50;
+      p.y += (p.y < cy ? -1 : +1) * (6 + 10*flow) * dt;
+
+      if (p.y < yMin){ p.y = yMin; p.vy *= -0.6; }
+      if (p.y > yMax){ p.y = yMax; p.vy *= -0.6; }
+
+      if (injury && inInjuryZone(p.x, p.y) && VWF_TETHER.length > 0){
+        let best = -1, bestD = 1e9;
+        for (let k=0;k<VWF_TETHER.length;k++){
+          const t = VWF_TETHER[k];
+          const d = Math.hypot(t.x - p.x, t.y - p.y);
+          if (d < bestD){ bestD=d; best=k; }
+        }
+        if (best >= 0 && bestD < 40){
+          const shearPenalty = 1/(1 + 0.90*flow);
+          const pAdh = 0.024 * pltBind * shearPenalty;
+          if (Math.random() < pAdh){
+            const t = VWF_TETHER[best];
+            PLT_ADH.push({ x: t.x + rand(-10,10), y: t.y + rand(-10,10), life: 1.0 });
+            PLT.splice(i,1);
+            continue;
+          }
+        }
+      }
+      if (p.x > WORLD.w + 140) PLT.splice(i,1);
+    }
+
+    // adhered platelets detach
+    for (let i=PLT_ADH.length-1;i>=0;i--){
+      const a = PLT_ADH[i];
+      a.life -= 0.0005 * dt * 60;
+      const pDet = 0.0018 * detach * flow * (1 - coverage*0.55);
+      if (Math.random() < pDet) a.life -= 0.16;
+      if (a.life <= 0) PLT_ADH.splice(i,1);
+    }
+
+    updateCoverage();
+    ui.portY.textContent = `${port.y.toFixed(0)}`;
+  }
+
+  // ---- draw ----
+  function draw(){
+    const rect = canvas.getBoundingClientRect();
+    ctx.clearRect(0,0,rect.width,rect.height);
+
+    // frame
+    ctx.save();
+    ctx.strokeStyle="rgba(255,255,255,0.08)";
+    ctx.lineWidth=1;
+    ctx.strokeRect(view.ox, view.oy, WORLD.w*view.scale, WORLD.h*view.scale);
+    ctx.restore();
+
+    // vessel walls
+    const topY = 80, botY = WORLD.h-80;
+    const t1 = w2s(0, topY), t2 = w2s(WORLD.w, topY);
+    const b1 = w2s(0, botY), b2 = w2s(WORLD.w, botY);
+    ctx.lineWidth = 10*view.scale;
+    ctx.strokeStyle = "rgba(120,180,255,0.16)";
+    ctx.beginPath(); ctx.moveTo(t1.x, t1.y); ctx.lineTo(t2.x, t2.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(b1.x, b1.y); ctx.lineTo(b2.x, b2.y); ctx.stroke();
+
+    // injection port zone (left band)
+    const bandW = 80;
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.fillRect(view.ox, view.oy, bandW*view.scale, WORLD.h*view.scale);
+
+    // port marker
+    const pm = w2s(0, port.y);
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(view.ox + 8*view.scale, pm.y);
+    ctx.lineTo(view.ox + 70*view.scale, pm.y);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.beginPath();
+    ctx.arc(view.ox + 30*view.scale, pm.y, 5*view.scale, 0, Math.PI*2);
+    ctx.fill();
+
+    // injury
+    if (injury){
+      const p = w2s(injury.x, injury.y);
+      ctx.fillStyle = "rgba(239,71,111,0.30)";
+      ctx.strokeStyle = "rgba(239,71,111,0.95)";
+      ctx.lineWidth = 2;
+      roundRect(ctx, p.x, p.y - rW2S(injury.h/2), rW2S(injury.w), rW2S(injury.h), 12*view.scale);
+      ctx.fill(); ctx.stroke();
+    } else if (placingInjury) {
+      ctx.fillStyle = "rgba(239,71,111,0.20)";
+      ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto";
+      ctx.fillText("Click canvas to place injury", 14, 44);
+    }
+
+    // tethered VWF
+    for (const t of VWF_TETHER){
+      const s = w2s(t.x, t.y);
+      ctx.globalAlpha = 0.25 + 0.75*t.life;
+      ctx.strokeStyle = "rgba(123,223,242,0.95)";
+      ctx.lineWidth = 2.2*view.scale;
+      ctx.beginPath();
+      ctx.moveTo(s.x - 12*view.scale, s.y - 6*view.scale);
+      ctx.lineTo(s.x + 12*view.scale, s.y + 6*view.scale);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // fibrin-ish hint when coverage high
+    if (injury && coverage > 0.45){
+      const p = w2s(injury.x, injury.y);
+      ctx.strokeStyle = `rgba(184,242,230,${(0.08 + 0.22*coverage).toFixed(3)})`;
+      ctx.lineWidth = 1;
+      for (let i=0;i<50;i++){
+        const x1 = p.x + rand(0, rW2S(injury.w));
+        const y1 = p.y - rW2S(injury.h/2) + rand(0, rW2S(injury.h));
+        const x2 = x1 + rand(-50,50)*view.scale;
+        const y2 = y1 + rand(-30,30)*view.scale;
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      }
+    }
+
+    // RBC
+    for (const r of RBC){
+      const s = w2s(r.x, r.y);
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(r.rot);
+      ctx.beginPath();
+      ctx.ellipse(0,0, rW2S(r.a), rW2S(r.b), 0, 0, Math.PI*2);
+      ctx.fillStyle = "rgba(215,38,61,0.70)";
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // VWF free
+    for (const v of VWF){
+      const s = w2s(v.x, v.y);
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(v.ang);
+      ctx.strokeStyle = "rgba(184,242,230,0.70)";
+      ctx.lineWidth = 2*view.scale;
+      ctx.beginPath();
+      ctx.moveTo(-rW2S(v.len), 0);
+      ctx.lineTo( rW2S(v.len), 0);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // platelets free
+    for (const p of PLT){
+      const s = w2s(p.x, p.y);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, rW2S(p.r), 0, Math.PI*2);
+      ctx.fillStyle = "rgba(255,209,102,0.72)";
+      ctx.fill();
+    }
+
+    // platelets adhered
+    for (const a of PLT_ADH){
+      const s = w2s(a.x, a.y);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, rW2S(6.8), 0, Math.PI*2);
+      ctx.fillStyle = `rgba(255,209,102,${(0.55 + 0.45*a.life).toFixed(3)})`;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,209,102,0.35)";
+      ctx.lineWidth = 1.2*view.scale;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x + rand(-10,10)*view.scale, s.y + rand(-10,10)*view.scale);
+      ctx.stroke();
+    }
+
+    // HUD
+    ctx.fillStyle = "rgba(232,238,252,0.85)";
+    ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+    ctx.fillText(`Mode:${mode} Injury:${injury? "YES":"NO"} PortY:${port.y.toFixed(0)} Injecting:${injecting? "YES":"NO"} VWF_tether:${VWF_TETHER.length} PLT_adh:${PLT_ADH.length} Cov:${Math.round(coverage*100)}%`, 12, 20);
+
+    // ---- CLEAR overlay ----
+    if (cleared){
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0, 0, rect.width, rect.height);
+
+      if (clearFlash > 0){
+        ctx.fillStyle = `rgba(255,255,255,${(0.25*clearFlash).toFixed(3)})`;
+        ctx.fillRect(0, 0, rect.width, rect.height);
+        clearFlash = Math.max(0, clearFlash - 0.03);
+      }
+
+      const size = Math.max(48, Math.min(rect.width, rect.height) * 0.14);
+      ctx.font = `800 ${size}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      ctx.fillText("Clear!!", rect.width/2 + 4, rect.height/2 + 6);
+
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillText("Clear!!", rect.width/2, rect.height/2);
+
+      ctx.font = `600 ${Math.max(14, size*0.22)}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
+      ctx.fillStyle = "rgba(232,238,252,0.90)";
+      ctx.fillText("Click / Enter to continue", rect.width/2, rect.height/2 + size*0.85);
+
+      ctx.restore();
+    }
+  }
+
+  function roundRect(ctx,x,y,w,h,r){
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr,y);
+    ctx.arcTo(x+w,y, x+w,y+h, rr);
+    ctx.arcTo(x+w,y+h, x,y+h, rr);
+    ctx.arcTo(x,y+h, x,y, rr);
+    ctx.arcTo(x,y, x+w,y, rr);
+    ctx.closePath();
+  }
+
+  // ---- loop ----
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.033, (now-last)/1000);
+    last = now;
+    step(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- events ----
+  ui.modeVWF.addEventListener("click", ()=>setMode("VWF"));
+  ui.modePLT.addEventListener("click", ()=>setMode("PLT"));
+
+  ui.placeInjury.addEventListener("click", ()=>{
+    placingInjury = true;
+    setStatus("Click canvas to place injury");
+  });
+
+  ui.reset.addEventListener("click", ()=>{
+    resetAll();
+  });
+
+  // Clear overlay dismiss
+  window.addEventListener("keydown", (e)=>{
+    if (!cleared) return;
+    if (e.key === "Enter"){
+      cleared = false;
+      setStatus("--");
+    }
+  });
+  canvas.addEventListener("click", ()=>{
+    if (!cleared) return;
+    cleared = false;
+    setStatus("--");
+  });
+
+  // Pointer logic:
+  // - If placing injury: click anywhere to place injury
+  // - Else: click on left band to set port + start injection (hold)
+  function handlePointerDown(ev){
+    const rect = canvas.getBoundingClientRect();
+    const sx = ev.clientX - rect.left;
+    const sy = ev.clientY - rect.top;
+    const w = s2w(sx, sy);
+
+    if (cleared){
+      // if clear overlay showing, just dismiss via click handler above
+      return;
+    }
+
+    if (placingInjury){
+      placingInjury = false;
+      createInjuryAt(w.x, w.y);
+      return;
+    }
+
+    // left band in screen-space
+    const bandWpx = 80 * view.scale;
+    const leftEdgeX = view.ox;
+    const inBand = (sx >= leftEdgeX && sx <= leftEdgeX + bandWpx);
+
+    if (inBand){
+      port.y = clamp(w.y, 90, WORLD.h-90);
+      ui.portY.textContent = `${port.y.toFixed(0)}`;
+      if (!injury){
+        setStatus("Place Injury first");
+        injecting = false;
+        return;
+      }
+      setStatus(`Port set (Y=${port.y.toFixed(0)}) — hold to inject`);
+      injecting = true;
+      injectAccum = 0;
+      return;
+    }
+
+    setStatus("Click left band to set port & inject");
+  }
+
+  function handlePointerUp(){
+    injecting = false;
+  }
+
+  canvas.addEventListener("mousedown", handlePointerDown);
+  window.addEventListener("mouseup", handlePointerUp);
+
+  // touch
+  canvas.addEventListener("touchstart", (ev)=>{
+    ev.preventDefault();
+    const t = ev.touches[0];
+    handlePointerDown({ clientX: t.clientX, clientY: t.clientY });
+  }, {passive:false});
+  window.addEventListener("touchend", ()=>{ injecting=false; });
+
+  // init
+  resetAll();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
+
+
