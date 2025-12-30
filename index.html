@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Hemostasis Game v3 (Place Injury + Left Port + Hold-to-Inject + Clear Overlay)</title>
+  <title>Hemostasis Game v3.4 (Arcing Blood Droplets)</title>
   <style>
     :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP", sans-serif; }
     body { margin: 0; background:#0b0f17; color:#e8eefc; }
@@ -45,13 +45,13 @@
 <body>
 <div class="wrap">
   <div class="panel">
-    <h1>止血ゲーム v3（①〜④ + Clear!!）</h1>
+    <h1>止血ゲーム v3.4（出血＝赤いしずくが放物線で画面外へ）</h1>
     <div class="sub">
       <b>操作</b><br>
-      1) <span class="pill">Place Injury</span> → キャンバスをクリックして傷口を配置（②）<br>
-      2) <span class="pill">Mode: VWF</span> → 左端の帯（投与口ゾーン）をクリックして投与口高さを決める → 押しっぱなしでVWF投与（③）<br>
-      3) <span class="pill">Mode: Platelet</span> → 同様に血小板を投与（④）<br>
-      4) Coverage 100%で全画面に <b>Clear!!</b>（クリック or Enterで消える）
+      1) <span class="pill">Place Injury</span> → キャンバスをクリックして傷口を配置<br>
+      2) <span class="pill">Mode: VWF</span> → 左端の帯をクリックして投与口高さを決める → 押しっぱなしでVWF投与<br>
+      3) <span class="pill">Mode: Platelet</span> → 同様に血小板を投与<br>
+      4) Coverage 100%で <b>Clear!!</b> / Blood loss 100%で <b>Game Over</b>
     </div>
 
     <div class="row">
@@ -91,6 +91,7 @@
 
     <div class="kpi">
       <div class="card"><div class="t">Coverage（傷口被覆）</div><div class="v" id="cov">0%</div></div>
+      <div class="card"><div class="t">Blood loss（失血）</div><div class="v" id="loss">0%</div></div>
       <div class="card"><div class="t">Status</div><div class="v" id="status">--</div></div>
       <div class="card"><div class="t">Port Y（投与口高さ）</div><div class="v" id="portY">--</div></div>
       <div class="card"><div class="t">Hint</div><div class="v" id="hint">--</div></div>
@@ -102,13 +103,14 @@
       <span><span class="dot" style="background:#b8f2e6"></span>VWF（流れる）</span>
       <span><span class="dot" style="background:#7bdff2"></span>VWF（貼付）</span>
       <span><span class="dot" style="background:#ef476f"></span>傷口</span>
+      <span><span class="dot" style="background:#ff0000"></span>出血（しずく）</span>
       <span><span class="dot" style="background:#ffffff"></span>投与口</span>
     </div>
 
     <div class="hint">
-      ・左端帯をクリック → 投与口設定＆そのまま押しっぱなしで連続投与<br>
-      ・RBC中央寄せ=0にすると赤血球が上下にも広がります（①）<br>
-      ・Clear!!表示中はクリック/Enterで閉じます（その後は継続。やり直しはReset）
+      ・傷口が未被覆の間、赤い「しずく」が放物線で飛び散って画面外で消えます（ゲーム優先）<br>
+      ・Flowを上げると「勢い」と「失血速度」が上がります<br>
+      ・Game Overはクリック/Enterでリセット
     </div>
   </div>
 
@@ -172,6 +174,7 @@
     detachv: document.getElementById("detachv"),
 
     cov: document.getElementById("cov"),
+    loss: document.getElementById("loss"),
     status: document.getElementById("status"),
     portY: document.getElementById("portY"),
     hint: document.getElementById("hint"),
@@ -193,21 +196,28 @@
   setReadouts();
 
   // ---- game state ----
-  let mode = "VWF";               // VWF | PLT
-  let placingInjury = false;      // click-to-place injury
-  let injury = null;              // {x,y,w,h}
+  let mode = "VWF";
+  let placingInjury = false;
+  let injury = null; // {x,y,w,h}
   let coverage = 0;
   let status = "--";
 
-  // Clear overlay
   let cleared = false;
   let clearFlash = 0;
 
+  let gameOver = false;
+  let gameOverFlash = 0;
+
+  // bleeding
+  const BLEED = [];
+  let bloodLoss = 0;
+  let bleedPulse = 0;
+
   // injection port on left
-  const port = { y: WORLD.h*0.52 }; // world coords
-  let injecting = false;          // mouse held
+  const port = { y: WORLD.h*0.52 };
+  let injecting = false;
   let injectAccum = 0;
-  const INJECT_INTERVAL = 0.08;   // seconds (hold to inject)
+  const INJECT_INTERVAL = 0.08;
 
   // particles
   const RBC = [];
@@ -225,38 +235,7 @@
   }
   setMode("VWF");
 
-  function setStatus(s){
-    status = s;
-    ui.status.textContent = status;
-  }
-
-  function resetAll(){
-    RBC.length=0; PLT.length=0; VWF.length=0; VWF_TETHER.length=0; PLT_ADH.length=0;
-    injury = null;
-    placingInjury = false;
-    injecting = false;
-    injectAccum = 0;
-    coverage = 0;
-    cleared = false;
-    clearFlash = 0;
-    setStatus("--");
-    ui.cov.textContent = "0%";
-    ui.portY.textContent = `${port.y.toFixed(0)}`;
-
-    // seed
-    spawnRBC(150);
-    spawnPlatelets(95);
-    spawnVWF(45);
-  }
-
-  function createInjuryAt(x,y){
-    const w = 300;
-    const h = 80;
-    const yClamped = clamp(y, 120, WORLD.h-120);
-    const xClamped = clamp(x, WORLD.w*0.25, WORLD.w*0.92);
-    injury = { x: xClamped, y: yClamped, w, h };
-    setStatus("Injury placed");
-  }
+  function setStatus(s){ status = s; ui.status.textContent = status; }
 
   // ---- spawners ----
   function spawnRBC(n){
@@ -275,30 +254,53 @@
   function spawnPlatelets(n, yTarget=null){
     for(let i=0;i<n;i++){
       const y = (yTarget===null) ? rand(60, WORLD.h-60) : clamp(yTarget + rand(-45,45), 40, WORLD.h-40);
-      PLT.push({
-        x: rand(-70, -10),
-        y,
-        vx: rand(230, 360),
-        vy: rand(-32, 32),
-        r: rand(3.0, 4.5),
-      });
+      PLT.push({ x: rand(-70, -10), y, vx: rand(230, 360), vy: rand(-32, 32), r: rand(3.0, 4.5) });
     }
   }
   function spawnVWF(n, yTarget=null){
     for(let i=0;i<n;i++){
       const y = (yTarget===null) ? rand(60, WORLD.h-60) : clamp(yTarget + rand(-50,50), 40, WORLD.h-40);
-      VWF.push({
-        x: rand(-70, -10),
-        y,
-        vx: rand(240, 380),
-        vy: rand(-28, 28),
-        len: rand(10, 22),
-        ang: rand(-0.7, 0.7),
-      });
+      VWF.push({ x: rand(-70, -10), y, vx: rand(240, 380), vy: rand(-28, 28), len: rand(10, 22), ang: rand(-0.7, 0.7) });
     }
   }
 
-  // ---- helpers ----
+  function resetAll(){
+    RBC.length=0; PLT.length=0; VWF.length=0; VWF_TETHER.length=0; PLT_ADH.length=0;
+    BLEED.length=0;
+
+    injury=null;
+    placingInjury=false;
+    injecting=false;
+    injectAccum=0;
+
+    coverage=0;
+    bloodLoss=0;
+    bleedPulse=0;
+
+    cleared=false;
+    clearFlash=0;
+
+    gameOver=false;
+    gameOverFlash=0;
+
+    setStatus("--");
+    ui.cov.textContent="0%";
+    ui.loss.textContent="0%";
+    ui.portY.textContent=`${port.y.toFixed(0)}`;
+
+    spawnRBC(150);
+    spawnPlatelets(95);
+    spawnVWF(45);
+  }
+
+  function createInjuryAt(x,y){
+    const w = 300, h = 80;
+    const yClamped = clamp(y, 120, WORLD.h-120);
+    const xClamped = clamp(x, WORLD.w*0.25, WORLD.w*0.92);
+    injury = { x: xClamped, y: yClamped, w, h };
+    setStatus("Injury placed");
+  }
+
   function inInjuryZone(x,y){
     if(!injury) return false;
     return (x >= injury.x && x <= injury.x + injury.w &&
@@ -307,8 +309,7 @@
 
   function updateCoverage(){
     if(!injury){
-      coverage = 0;
-      ui.cov.textContent = "0%";
+      coverage=0; ui.cov.textContent="0%";
       return;
     }
     const injuryArea = injury.w * injury.h;
@@ -316,15 +317,59 @@
     coverage = clamp01(plateletArea / injuryArea);
     ui.cov.textContent = `${Math.round(coverage*100)}%`;
 
-    if (!cleared && coverage >= 1){
+    if (!cleared && !gameOver && coverage >= 1){
       cleared = true;
       clearFlash = 1.0;
       setStatus("COVERED! (Goal)");
     }
   }
 
-  // ---- main step ----
+  // ---------------------------
+  // Blood droplet (teardrop) splash
+  // ---------------------------
+  function emitDroplets(uncovered, flow, dt){
+    if (!injury) return;
+
+    // “まとまって”出る：burst/秒
+    const intensity = uncovered * (0.55 + 1.15*flow);
+    const burstsPerSec = 3.2 * intensity;     // これで「デカいしずく」が時々飛ぶ
+    const expected = burstsPerSec * dt;
+
+    // 確率で1回発射（dt依存で安定）
+    if (Math.random() > expected) return;
+
+    // 1 burst につき数個
+    const n = Math.floor(rand(2, 5) * (0.8 + 0.9*uncovered));
+    for (let i=0;i<n;i++){
+      // 傷口の「上縁」あたりから出ると見た目が分かりやすい
+      const x0 = injury.x + rand(0, injury.w);
+      const y0 = injury.y - injury.h*0.25 + rand(-8, 8);
+
+      // 右方向に強く、上下にも散る
+      const ang = rand(-Math.PI*0.35, Math.PI*0.35); // -63..63°
+      const speed = rand(780, 1250) * (0.65 + 0.8*flow) * (0.7 + 0.5*uncovered);
+
+      const vx = Math.cos(ang) * speed + 320*flow;
+      const vy = Math.sin(ang) * speed - rand(120, 260); // 少し上へ飛ばす（放物線が気持ちいい）
+
+      // “しずくの大きさ”をゲーム的に大きく（スクショの感じ）
+      const size = rand(18, 36) * (0.85 + 0.55*uncovered);
+
+      BLEED.push({
+        x:x0, y:y0,
+        vx, vy,
+        s:size,          // size (world)
+        life: 1.0,
+        // trail
+        tx0:x0, ty0:y0,
+        tx1:x0, ty1:y0
+      });
+    }
+  }
+
   function step(dt){
+    if (gameOver) return;
+
     const flow = ui.flow.value/100;
     const basePl = ui.basePl.value/100;
     const baseRbc = ui.baseRbc.value/100;
@@ -334,7 +379,7 @@
     if (Math.random() < 0.12*basePl) spawnPlatelets(1);
     if (Math.random() < 0.02) spawnVWF(1);
 
-    // hold-to-inject (only if injury exists; clear overlay doesn't stop physics)
+    // hold-to-inject
     if (injecting && injury){
       injectAccum += dt;
       while (injectAccum >= INJECT_INTERVAL){
@@ -344,15 +389,15 @@
       }
     }
 
-    // cap
+    // caps
     while (RBC.length > MAX_FREE) RBC.shift();
     while (PLT.length > MAX_FREE) PLT.shift();
     while (VWF.length > MAX_FREE) VWF.shift();
 
     const yMin = 80, yMax = WORLD.h - 80;
 
-    // RBC (① adjustable centering)
-    const centerStrength = (ui.rbcCenter.value/100); // 0..1
+    // RBC (①)
+    const centerStrength = (ui.rbcCenter.value/100);
     for (const r of RBC){
       r.x += r.vx * flow * dt;
       r.y += r.vy * dt;
@@ -364,9 +409,7 @@
       if (r.y < yMin){ r.y = yMin; r.vy *= -0.6; }
       if (r.y > yMax){ r.y = yMax; r.vy *= -0.6; }
     }
-    for (let i=RBC.length-1;i>=0;i--){
-      if (RBC[i].x > WORLD.w + 260) RBC.splice(i,1);
-    }
+    for (let i=RBC.length-1;i>=0;i--) if (RBC[i].x > WORLD.w + 260) RBC.splice(i,1);
 
     // VWF free + tether (③)
     const vwfBind = ui.vwfBind.value/100;
@@ -445,7 +488,105 @@
     }
 
     updateCoverage();
+
+    // ---- bleeding + droplets ----
+    if (injury && !cleared){
+      const uncovered = 1 - coverage;
+      bleedPulse += dt * 6;
+
+      // loss speed
+      bloodLoss = clamp01(bloodLoss + (0.010 * uncovered * (0.45 + 0.85*flow)) * dt);
+
+      // emit big teardrops
+      if (uncovered > 0.001) emitDroplets(uncovered, flow, dt);
+
+      if (!cleared && bloodLoss >= 1){
+        gameOver = true;
+        gameOverFlash = 1.0;
+        injecting = false;
+        setStatus("GAME OVER (Blood loss 100%)");
+      }
+    }
+
+    // droplet physics: ballistic arc + offscreen vanish
+    const g = 1600;                      // gravity (world/s^2)
+    const air = 0.995;                   // mild drag
+    const margin = 220;                  // offscreen margin
+
+    for (let i=BLEED.length-1;i>=0;i--){
+      const b = BLEED[i];
+
+      // trail points (a little lag for smoothness)
+      b.tx0 = b.tx1; b.ty0 = b.ty1;
+      b.tx1 += (b.x - b.tx1) * 0.55;
+      b.ty1 += (b.y - b.ty1) * 0.55;
+
+      // integrate
+      b.vy += g * dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      // drag
+      b.vx *= Math.pow(air, dt*60);
+      b.vy *= Math.pow(air, dt*60);
+
+      // fade a bit as it flies
+      b.life -= dt * 0.20;
+
+      // disappear when outside world bounds (so「画面外に飛んで消える」)
+      if (b.x > WORLD.w + margin || b.y > WORLD.h + margin || b.y < -margin || b.life <= 0){
+        BLEED.splice(i,1);
+      }
+    }
+
     ui.portY.textContent = `${port.y.toFixed(0)}`;
+    ui.loss.textContent = `${Math.round(bloodLoss*100)}%`;
+  }
+
+  // ---- drawing helpers ----
+  function roundRect(ctx,x,y,w,h,r){
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr,y);
+    ctx.arcTo(x+w,y, x+w,y+h, rr);
+    ctx.arcTo(x+w,y+h, x,y+h, rr);
+    ctx.arcTo(x,y+h, x,y, rr);
+    ctx.arcTo(x,y, x+w,y, rr);
+    ctx.closePath();
+  }
+
+  function drawTeardrop(ctx, x, y, s, angleRad){
+    // s: size (world) -> will be converted before call
+    // normalized teardrop path in local space:
+    // top point at (0,-1), bulb around (0,0.35..1)
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.rotate(angleRad);
+
+    ctx.beginPath();
+    ctx.moveTo(0, -s*1.05);
+    ctx.bezierCurveTo(s*0.85, -s*0.55, s*1.00, s*0.35, 0, s*1.05);
+    ctx.bezierCurveTo(-s*1.00, s*0.35, -s*0.85, -s*0.55, 0, -s*1.05);
+    ctx.closePath();
+
+    // fill
+    ctx.fillStyle = "rgba(255,0,0,0.92)";
+    ctx.fill();
+
+    // outline (dark cyan-ish like screenshot)
+    ctx.strokeStyle = "rgba(20,210,220,0.55)";
+    ctx.lineWidth = Math.max(1.6, s*0.10);
+    ctx.stroke();
+
+    // highlight
+    ctx.globalAlpha = 0.28;
+    ctx.beginPath();
+    ctx.ellipse(-s*0.28, -s*0.15, s*0.22, s*0.35, -0.45, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
   }
 
   // ---- draw ----
@@ -469,7 +610,7 @@
     ctx.beginPath(); ctx.moveTo(t1.x, t1.y); ctx.lineTo(t2.x, t2.y); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(b1.x, b1.y); ctx.lineTo(b2.x, b2.y); ctx.stroke();
 
-    // injection port zone (left band)
+    // injection band
     const bandW = 80;
     ctx.fillStyle = "rgba(255,255,255,0.05)";
     ctx.fillRect(view.ox, view.oy, bandW*view.scale, WORLD.h*view.scale);
@@ -487,7 +628,7 @@
     ctx.arc(view.ox + 30*view.scale, pm.y, 5*view.scale, 0, Math.PI*2);
     ctx.fill();
 
-    // injury
+    // injury + glow
     if (injury){
       const p = w2s(injury.x, injury.y);
       ctx.fillStyle = "rgba(239,71,111,0.30)";
@@ -495,37 +636,34 @@
       ctx.lineWidth = 2;
       roundRect(ctx, p.x, p.y - rW2S(injury.h/2), rW2S(injury.w), rW2S(injury.h), 12*view.scale);
       ctx.fill(); ctx.stroke();
-    } else if (placingInjury) {
+
+      if (!cleared && coverage < 1){
+        const pulse = 0.5 + 0.5*Math.sin(bleedPulse*2.0);
+        ctx.save();
+        ctx.globalAlpha = 0.10 + 0.26*pulse*(1-coverage);
+        ctx.fillStyle = "rgba(255,0,0,1)";
+        roundRect(ctx,
+          p.x - rW2S(18),
+          p.y - rW2S(injury.h/2) - rW2S(14),
+          rW2S(injury.w) + rW2S(36),
+          rW2S(injury.h) + rW2S(28),
+          18*view.scale
+        );
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.fillStyle = "rgba(255,190,200,0.95)";
+        ctx.font = `800 ${Math.max(16, 18*view.scale)}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillText("BLEEDING!!", p.x + rW2S(injury.w)/2, p.y - rW2S(injury.h/2) - 10*view.scale);
+        ctx.restore();
+      }
+    } else if (placingInjury){
       ctx.fillStyle = "rgba(239,71,111,0.20)";
       ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto";
       ctx.fillText("Click canvas to place injury", 14, 44);
-    }
-
-    // tethered VWF
-    for (const t of VWF_TETHER){
-      const s = w2s(t.x, t.y);
-      ctx.globalAlpha = 0.25 + 0.75*t.life;
-      ctx.strokeStyle = "rgba(123,223,242,0.95)";
-      ctx.lineWidth = 2.2*view.scale;
-      ctx.beginPath();
-      ctx.moveTo(s.x - 12*view.scale, s.y - 6*view.scale);
-      ctx.lineTo(s.x + 12*view.scale, s.y + 6*view.scale);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-
-    // fibrin-ish hint when coverage high
-    if (injury && coverage > 0.45){
-      const p = w2s(injury.x, injury.y);
-      ctx.strokeStyle = `rgba(184,242,230,${(0.08 + 0.22*coverage).toFixed(3)})`;
-      ctx.lineWidth = 1;
-      for (let i=0;i<50;i++){
-        const x1 = p.x + rand(0, rW2S(injury.w));
-        const y1 = p.y - rW2S(injury.h/2) + rand(0, rW2S(injury.h));
-        const x2 = x1 + rand(-50,50)*view.scale;
-        const y2 = y1 + rand(-30,30)*view.scale;
-        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-      }
     }
 
     // RBC
@@ -556,6 +694,19 @@
       ctx.restore();
     }
 
+    // tethered VWF
+    for (const t of VWF_TETHER){
+      const s = w2s(t.x, t.y);
+      ctx.globalAlpha = 0.25 + 0.75*t.life;
+      ctx.strokeStyle = "rgba(123,223,242,0.95)";
+      ctx.lineWidth = 2.2*view.scale;
+      ctx.beginPath();
+      ctx.moveTo(s.x - 12*view.scale, s.y - 6*view.scale);
+      ctx.lineTo(s.x + 12*view.scale, s.y + 6*view.scale);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
     // platelets free
     for (const p of PLT){
       const s = w2s(p.x, p.y);
@@ -580,51 +731,99 @@
       ctx.stroke();
     }
 
+    // ---- BLEED DROPLETS: draw last, big impact ----
+    for (const b of BLEED){
+      const s = w2s(b.x, b.y);
+      const t0 = w2s(b.tx0, b.ty0);
+      const t1p = w2s(b.tx1, b.ty1);
+
+      // direction by velocity
+      const ang = Math.atan2(b.vy, b.vx) + Math.PI/2;
+
+      // trail: thick red stroke
+      const alpha = clamp01(b.life);
+      ctx.save();
+      ctx.globalAlpha = 0.55 * alpha;
+      ctx.strokeStyle = "rgba(255,0,0,1)";
+      ctx.lineWidth = Math.max(2.5, rW2S(b.s)*0.18);
+      ctx.beginPath();
+      ctx.moveTo(t0.x, t0.y);
+      ctx.lineTo(t1p.x, t1p.y);
+      ctx.stroke();
+
+      // fade tail tip
+      ctx.globalAlpha = 0.25 * alpha;
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = Math.max(1.5, rW2S(b.s)*0.08);
+      ctx.beginPath();
+      ctx.moveTo(t0.x, t0.y);
+      ctx.lineTo(t1p.x, t1p.y);
+      ctx.stroke();
+      ctx.restore();
+
+      // teardrop body
+      ctx.save();
+      ctx.globalAlpha = 0.95 * alpha;
+      drawTeardrop(ctx, s.x, s.y, rW2S(b.s), ang);
+      ctx.restore();
+    }
+
     // HUD
     ctx.fillStyle = "rgba(232,238,252,0.85)";
     ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
-    ctx.fillText(`Mode:${mode} Injury:${injury? "YES":"NO"} PortY:${port.y.toFixed(0)} Injecting:${injecting? "YES":"NO"} VWF_tether:${VWF_TETHER.length} PLT_adh:${PLT_ADH.length} Cov:${Math.round(coverage*100)}%`, 12, 20);
+    ctx.fillText(
+      `Mode:${mode} Injury:${injury? "YES":"NO"} PortY:${port.y.toFixed(0)} Injecting:${injecting? "YES":"NO"} VWF_tether:${VWF_TETHER.length} PLT_adh:${PLT_ADH.length} Cov:${Math.round(coverage*100)}% Loss:${Math.round(bloodLoss*100)}%`,
+      12, 20
+    );
 
-    // ---- CLEAR overlay ----
+    // overlays
     if (cleared){
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.55)";
       ctx.fillRect(0, 0, rect.width, rect.height);
-
       if (clearFlash > 0){
         ctx.fillStyle = `rgba(255,255,255,${(0.25*clearFlash).toFixed(3)})`;
         ctx.fillRect(0, 0, rect.width, rect.height);
         clearFlash = Math.max(0, clearFlash - 0.03);
       }
-
       const size = Math.max(48, Math.min(rect.width, rect.height) * 0.14);
       ctx.font = `800 ${size}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-
       ctx.fillStyle = "rgba(0,0,0,0.65)";
       ctx.fillText("Clear!!", rect.width/2 + 4, rect.height/2 + 6);
-
       ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.fillText("Clear!!", rect.width/2, rect.height/2);
-
       ctx.font = `600 ${Math.max(14, size*0.22)}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
       ctx.fillStyle = "rgba(232,238,252,0.90)";
       ctx.fillText("Click / Enter to continue", rect.width/2, rect.height/2 + size*0.85);
-
       ctx.restore();
     }
-  }
 
-  function roundRect(ctx,x,y,w,h,r){
-    const rr = Math.min(r, w/2, h/2);
-    ctx.beginPath();
-    ctx.moveTo(x+rr,y);
-    ctx.arcTo(x+w,y, x+w,y+h, rr);
-    ctx.arcTo(x+w,y+h, x,y+h, rr);
-    ctx.arcTo(x,y+h, x,y, rr);
-    ctx.arcTo(x,y, x+w,y, rr);
-    ctx.closePath();
+    if (gameOver){
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      ctx.fillRect(0, 0, rect.width, rect.height);
+      if (gameOverFlash > 0){
+        ctx.fillStyle = `rgba(255,70,90,${(0.18*gameOverFlash).toFixed(3)})`;
+        ctx.fillRect(0, 0, rect.width, rect.height);
+        gameOverFlash = Math.max(0, gameOverFlash - 0.03);
+      }
+      const size = Math.max(44, Math.min(rect.width, rect.height) * 0.12);
+      ctx.font = `900 ${size}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "rgba(0,0,0,0.70)";
+      ctx.fillText("Game Over", rect.width/2 + 4, rect.height/2 + 6);
+      ctx.fillStyle = "rgba(255,200,210,0.98)";
+      ctx.fillText("Game Over", rect.width/2, rect.height/2);
+      ctx.font = `700 ${Math.max(14, size*0.22)}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
+      ctx.fillStyle = "rgba(232,238,252,0.92)";
+      ctx.fillText("Blood loss reached 100%", rect.width/2, rect.height/2 + size*0.72);
+      ctx.font = `600 ${Math.max(14, size*0.20)}px system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP"`;
+      ctx.fillText("Click / Enter to reset", rect.width/2, rect.height/2 + size*1.10);
+      ctx.restore();
+    }
   }
 
   // ---- loop ----
@@ -642,41 +841,30 @@
   ui.modePLT.addEventListener("click", ()=>setMode("PLT"));
 
   ui.placeInjury.addEventListener("click", ()=>{
+    if (gameOver) return;
     placingInjury = true;
     setStatus("Click canvas to place injury");
   });
 
-  ui.reset.addEventListener("click", ()=>{
-    resetAll();
-  });
+  ui.reset.addEventListener("click", ()=> resetAll());
 
-  // Clear overlay dismiss
   window.addEventListener("keydown", (e)=>{
-    if (!cleared) return;
-    if (e.key === "Enter"){
-      cleared = false;
-      setStatus("--");
-    }
-  });
-  canvas.addEventListener("click", ()=>{
-    if (!cleared) return;
-    cleared = false;
-    setStatus("--");
+    if (cleared && e.key === "Enter"){ cleared=false; setStatus("--"); return; }
+    if (gameOver && e.key === "Enter"){ resetAll(); return; }
   });
 
-  // Pointer logic:
-  // - If placing injury: click anywhere to place injury
-  // - Else: click on left band to set port + start injection (hold)
+  canvas.addEventListener("click", ()=>{
+    if (cleared){ cleared=false; setStatus("--"); return; }
+    if (gameOver){ resetAll(); return; }
+  });
+
   function handlePointerDown(ev){
     const rect = canvas.getBoundingClientRect();
     const sx = ev.clientX - rect.left;
     const sy = ev.clientY - rect.top;
     const w = s2w(sx, sy);
 
-    if (cleared){
-      // if clear overlay showing, just dismiss via click handler above
-      return;
-    }
+    if (cleared || gameOver) return;
 
     if (placingInjury){
       placingInjury = false;
@@ -684,7 +872,6 @@
       return;
     }
 
-    // left band in screen-space
     const bandWpx = 80 * view.scale;
     const leftEdgeX = view.ox;
     const inBand = (sx >= leftEdgeX && sx <= leftEdgeX + bandWpx);
@@ -705,15 +892,11 @@
 
     setStatus("Click left band to set port & inject");
   }
-
-  function handlePointerUp(){
-    injecting = false;
-  }
+  function handlePointerUp(){ injecting = false; }
 
   canvas.addEventListener("mousedown", handlePointerDown);
   window.addEventListener("mouseup", handlePointerUp);
 
-  // touch
   canvas.addEventListener("touchstart", (ev)=>{
     ev.preventDefault();
     const t = ev.touches[0];
@@ -728,5 +911,3 @@
 </script>
 </body>
 </html>
-
-
